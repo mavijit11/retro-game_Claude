@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pixel Invaders</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap">
+<style>
+:root{--bg:#120a24;--ink:#e9e2ff;--cyan:#3df2ff;--mag:#ff3d9a;--amb:#ffc23d;--grn:#7dff6a;--dim:#6b5a9a;
+  box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+html,body{height:100%;margin:0}
+body{background:radial-gradient(ellipse at 50% 30%,#241247,var(--bg) 70%);color:var(--ink);
+  font-family:"Press Start 2P",ui-monospace,Menlo,Consolas,monospace;display:flex;align-items:center;justify-content:center;
+  -webkit-user-select:none;user-select:none;touch-action:manipulation}
+.wrap{display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;max-width:100%;padding:8px}
+.hud{display:flex;justify-content:space-between;width:min(92vw,480px,calc((100vh - 170px)*0.8));font-size:10px;line-height:1.6;color:var(--amb)}
+.hud b{color:var(--cyan);font-weight:400}
+.screen{position:relative;width:min(92vw,480px,calc((100vh - 170px)*0.8));aspect-ratio:4/5;border:3px solid var(--dim);border-radius:10px;
+  box-shadow:0 0 0 3px #000,0 0 40px #7b3dff55;overflow:hidden;background:#07030f}
+canvas{width:100%;height:100%;display:block;image-rendering:pixelated}
+.screen::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(to bottom,rgba(0,0,0,.28) 0 1px,transparent 1px 3px);mix-blend-mode:multiply}
+.pad{display:flex;gap:10px;width:min(92vw,480px)}
+.pad button{flex:1;padding:16px 0;font:inherit;font-size:14px;color:var(--ink);background:#241247;border:2px solid var(--dim);border-radius:8px;cursor:pointer}
+.pad button.fire{flex:1.6;color:#120a24;background:var(--mag);border-color:#ff8fc5}
+.pad button:active,.pad button.on{transform:translateY(2px);filter:brightness(1.3)}
+.pad button:focus-visible{outline:3px solid var(--cyan);outline-offset:2px}
+.hint{font-size:8px;color:var(--dim);text-align:center;line-height:1.8}
+@media (pointer:fine){.pad{display:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hud"><span>SCORE <b id="sc">0</b></span><span>HI <b id="hi">0</b></span><span>LIVES <b id="lv">3</b></span></div>
+  <div class="screen"><canvas id="c" width="240" height="300" aria-label="Pixel Invaders game"></canvas></div>
+  <div class="pad">
+    <button id="bl" aria-label="Move left">&lt;</button>
+    <button id="bf" class="fire">FIRE</button>
+    <button id="br" aria-label="Move right">&gt;</button>
+  </div>
+  <div class="hint">ARROWS / A D MOVE &nbsp; SPACE FIRE &nbsp; ENTER START</div>
+</div>
+<script>
+(()=>{
+const cv=document.getElementById('c'),g=cv.getContext('2d'),W=240,H=300;
+const $=id=>document.getElementById(id);
+const COL={c:'#3df2ff',m:'#ff3d9a',a:'#ffc23d',g:'#7dff6a',w:'#e9e2ff'};
+// sprites (8 wide)
+const SP={
+ a1:["..#..#..","...##...","..####..",".##..##.","########","#.####.#","#.#..#.#","...##..."],
+ a2:["..#..#..","#.####.#","#.####.#","###..###","########",".######.","..#..#..",".#....#."],
+ pl:["....#....","...###...","...###...","#########","#########","#########"]
+};
+function draw(s,x,y,c,sz=1){g.fillStyle=c;s.forEach((r,j)=>{for(let i=0;i<r.length;i++)if(r[i]=='#')g.fillRect(x+i*sz,y+j*sz,sz,sz)})}
+// audio
+let ac=null;
+function beep(f,d=.08,t='square',v=.05,s=0){try{ac=ac||new (window.AudioContext||window.webkitAudioContext)();
+ const o=ac.createOscillator(),gn=ac.createGain();o.type=t;o.frequency.setValueAtTime(f,ac.currentTime);
+ if(s)o.frequency.exponentialRampToValueAtTime(Math.max(30,f+s),ac.currentTime+d);
+ gn.gain.setValueAtTime(v,ac.currentTime);gn.gain.exponentialRampToValueAtTime(.0001,ac.currentTime+d);
+ o.connect(gn).connect(ac.destination);o.start();o.stop(ac.currentTime+d)}catch(e){}}
+let hi=0;try{hi=+localStorage.getItem('pixinv-hi')||0}catch(e){}
+let st='title',score=0,lives=3,level=1,aliens,ox,oy,dir,stepT,frame,pl,shot,bombs,cells,parts,stars,inv,msgT,keys={};
+stars=Array.from({length:40},()=>({x:Math.random()*W,y:Math.random()*H,s:Math.random()*.6+.2}));
+function hud(){$('sc').textContent=score;$('hi').textContent=hi;$('lv').textContent=lives}
+function buildBunkers(){cells=[];for(let b=0;b<3;b++){const bx=30+b*72;
+ for(let j=0;j<6;j++)for(let i=0;i<12;i++){if(j<2&&(i<2||i>9))continue;if(j>3&&i>3&&i<8)continue;
+ cells.push({x:bx+i*3,y:232+j*3})}}}
+function newWave(){aliens=[];for(let r=0;r<4;r++)for(let c=0;c<8;c++)aliens.push({c,r,x:c*22,y:r*18,alive:1});
+ ox=20;oy=34+Math.min(level-1,4)*6;dir=1;stepT=0;frame=0;bombs=[];shot=null;buildBunkers()}
+function start(){score=0;lives=3;level=1;pl={x:W/2-4,cd:0};parts=[];inv=0;newWave();st='play';hud();beep(440,.1,'square',.06,300)}
+function boom(x,y,c,n=10){for(let i=0;i<n;i++)parts.push({x,y,vx:(Math.random()-.5)*90,vy:(Math.random()-.5)*90,t:.4+Math.random()*.3,c})}
+function fire(){if(st!=='play'){if(st==='title'||st==='over')start();return}
+ if(!shot){shot={x:pl.x+4,y:H-30};beep(880,.09,'square',.05,-500)}}
+function alive(){return aliens.filter(a=>a.alive)}
+function step(dt){
+ if(st!=='play')return;
+ const sp=140;if(keys.l)pl.x-=sp*dt;if(keys.r)pl.x+=sp*dt;pl.x=Math.max(6,Math.min(W-15,pl.x));
+ if(keys.f)fire();
+ if(inv>0)inv-=dt;
+ const al=alive(),n=al.length,iv=Math.max(.04,.02+n/32*.62-(level-1)*.03);
+ stepT+=dt;
+ if(stepT>=iv){stepT=0;frame^=1;beep(frame?110:90,.05,'square',.04);
+  const minX=Math.min(...al.map(a=>a.x))+ox,maxX=Math.max(...al.map(a=>a.x))+ox+8;
+  if((dir>0&&maxX+4>W-6)||(dir<0&&minX-4<6)){dir*=-1;oy+=8}else ox+=4*dir}
+ const maxY=Math.max(...al.map(a=>a.y))+oy+8;
+ if(maxY>=H-34)return lose(true);
+ if(shot){shot.y-=280*dt;
+  if(shot.y<24)shot=null;
+  else{for(const a of al){const ax=a.x+ox,ay=a.y+oy;
+   if(shot.x>=ax&&shot.x<=ax+8&&shot.y>=ay&&shot.y<=ay+8){a.alive=0;shot=null;score+=[40,30,20,10][a.r]*1;
+    if(score>hi){hi=score;try{localStorage.setItem('pixinv-hi',hi)}catch(e){}}
+    boom(ax+4,ay+4,COL[['m','a','c','g'][a.r]]);beep(200,.15,'sawtooth',.06,-150);hud();break}}
+  }
+  if(shot){const i=cells.findIndex(c=>shot.x>=c.x&&shot.x<=c.x+3&&shot.y>=c.y&&shot.y<=c.y+3);
+   if(i>=0){cells.splice(i,1);shot=null}}}
+ if(!alive().length){level++;msgT=1.4;st='wave';beep(660,.3,'triangle',.06,400);return}
+ if(Math.random()<dt*(0.9+level*.25)){const cols={};al.forEach(a=>{if(!cols[a.c]||a.r>cols[a.c].r)cols[a.c]=a});
+  const ks=Object.values(cols),b=ks[Math.floor(Math.random()*ks.length)];bombs.push({x:b.x+ox+4,y:b.y+oy+8})}
+ for(const b of bombs){b.y+=(80+level*10)*dt;
+  const i=cells.findIndex(c=>b.x>=c.x-1&&b.x<=c.x+4&&b.y>=c.y&&b.y<=c.y+3);
+  if(i>=0){cells.splice(i,1);cells.splice(Math.max(0,i-1),1);b.dead=1;continue}
+  if(inv<=0&&b.x>=pl.x&&b.x<=pl.x+9&&b.y>=H-24&&b.y<=H-16){b.dead=1;lose(false)}
+  if(b.y>H)b.dead=1}
+ bombs=bombs.filter(b=>!b.dead)}
+function lose(total){boom(pl.x+4,H-20,COL.c,24);beep(120,.5,'sawtooth',.08,-90);
+ lives=total?0:lives-1;hud();if(lives<=0){st='over'}else{inv=1.5;bombs=[];shot=null}}
+function frameLoop(){
+ // stars
+ g.fillStyle='#07030f';g.fillRect(0,0,W,H);
+ g.fillStyle='#5a4a8a';stars.forEach(s=>{s.y+=s.s*.3;if(s.y>H)s.y=0;g.fillRect(s.x|0,s.y|0,1,1)});
+ if(st==='play'||st==='wave'||st==='over'){
+  aliens.forEach(a=>{if(a.alive)draw(frame?SP.a2:SP.a1,a.x+ox|0,a.y+oy|0,COL[['m','a','c','g'][a.r]])});
+  g.fillStyle=COL.g;cells.forEach(c=>g.fillRect(c.x,c.y,3,3));
+  if(!(st==='over')&&(inv<=0||((inv*10)|0)%2))draw(SP.pl,pl.x|0,H-24,COL.c);
+  if(shot){g.fillStyle=COL.w;g.fillRect(shot.x|0,shot.y|0,2,6)}
+  g.fillStyle=COL.a;bombs.forEach(b=>{g.fillRect(b.x|0,b.y|0,2,2);g.fillRect((b.x|0)+(((b.y/3)|0)%2?1:-1),(b.y|0)+2,2,2)});
+  g.fillStyle=COL.dim||'#6b5a9a';g.fillRect(6,H-12,W-12,1)}
+ parts.forEach(p=>{p.x+=p.vx/60;p.y+=p.vy/60;p.t-=1/60;g.fillStyle=p.c;g.fillRect(p.x|0,p.y|0,2,2)});
+ parts=parts.filter(p=>p.t>0);
+ g.textAlign='center';
+ if(st==='title'){txt('PIXEL',W/2,90,26,COL.m);txt('INVADERS',W/2,122,20,COL.c);
+  draw(SP.a1,W/2-16-8,150,COL.g,2);draw(SP.a2,W/2+2,150,COL.a,2);
+  if((Date.now()/500|0)%2)txt('PRESS FIRE TO START',W/2,230,8,COL.w);txt('HI '+hi,W/2,260,8,COL.a)}
+ if(st==='wave')txt('WAVE '+level,W/2,160,16,COL.a);
+ if(st==='over'){txt('GAME OVER',W/2,130,20,COL.m);txt('SCORE '+score,W/2,160,10,COL.w);
+  if((Date.now()/500|0)%2)txt('FIRE TO RETRY',W/2,200,8,COL.c)}
+}
+function txt(s,x,y,sz,c){g.font=sz+'px "Press Start 2P",monospace';g.fillStyle='#000';g.fillText(s,x+2,y+2);g.fillStyle=c;g.fillText(s,x,y)}
+let last=performance.now();
+function loop(t){const dt=Math.min(.05,(t-last)/1000);last=t;
+ if(st==='wave'){msgT-=dt;if(msgT<=0){st='play';newWave()}}
+ step(dt);frameLoop();requestAnimationFrame(loop)}
+// input
+addEventListener('keydown',e=>{const k=e.key;
+ if(k==='ArrowLeft'||k==='a'||k==='A')keys.l=1;
+ else if(k==='ArrowRight'||k==='d'||k==='D')keys.r=1;
+ else if(k===' '||k==='ArrowUp'||k==='Enter'){keys.f=1;fire()}
+ else return;e.preventDefault()});
+addEventListener('keyup',e=>{const k=e.key;
+ if(k==='ArrowLeft'||k==='a'||k==='A')keys.l=0;
+ if(k==='ArrowRight'||k==='d'||k==='D')keys.r=0;
+ if(k===' '||k==='ArrowUp'||k==='Enter')keys.f=0});
+[['bl','l'],['br','r'],['bf','f']].forEach(([id,k])=>{const b=$(id);
+ const on=e=>{e.preventDefault();keys[k]=1;b.classList.add('on');if(k==='f')fire()},off=()=>{keys[k]=0;b.classList.remove('on')};
+ b.addEventListener('pointerdown',on);['pointerup','pointerleave','pointercancel'].forEach(n=>b.addEventListener(n,off))});
+cv.addEventListener('pointerdown',()=>{if(st==='title'||st==='over')fire()});
+pl={x:W/2-4,cd:0};aliens=[];cells=[];bombs=[];parts=[];hud();
+(document.fonts&&document.fonts.load?document.fonts.load('10px "Press Start 2P"').catch(()=>{}):Promise.resolve()).finally(()=>requestAnimationFrame(loop));
+})();
+</script>
+</body>
+</html>
